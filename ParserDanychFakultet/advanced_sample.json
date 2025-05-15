@@ -1,0 +1,35 @@
+{
+    "metadata": {
+        "source": "user_import",
+        "timestamp": "2025-05-15T10:30:00Z"
+    },
+    "users": [
+        {
+            "id": 1,
+            "name": "Alice",
+            "age": 30,
+            "email": "alice@example.com",
+            "is_active": true,
+            "roles": ["admin", "editor"],
+            "address": {"city": "New York", "zip": "10001"}
+        },
+        {
+            "id": 2,
+            "name": "Bob",
+            "age": 25,
+            "email": "bob@example.com",
+            "is_active": false,
+            "roles": [],
+            "address": {"city": "Los Angeles", "zip": "90001"}
+        },
+        {
+            "id": 3,
+            "name": "Charlie",
+            "age": 40,
+            "email": "charlie@example.com",
+            "is_active": true,
+            "roles": ["viewer"],
+            "address": {"city": "Chicago", "zip": "60601"}
+        }
+    ]
+}
