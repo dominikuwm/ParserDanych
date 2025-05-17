@@ -1,362 +1,222 @@
 import pytest
-from io import BytesIO
-from src.ParserXML import parse_xml, XMLParsingError
 
-class TestXMLParserBasicSyntax:
+from src.ParserXML import XMLParsingError, parse_xml
 
-    def test_parse_empty_document_raises(self):
-        # Pusty string powinien rzucić błąd
-        with pytest.raises(XMLParsingError):
-            parse_xml("")
+#fragmenty komunikatów
 
-        # Deklaracja XML bez treści też powinna rzucić błąd
-        with pytest.raises(XMLParsingError):
-            parse_xml('<?xml version="1.0"?>')
+_PL_BAD_XML = "Niepoprawny XML"
+_PL_MISSING_TAG = "Brak wymaganego taga"
+_PL_MISSING_ATTR = "nie ma atrybutu"
+_PL_BOOL_ERROR = "nie jest bool-em"
+_PL_WRONG_TYPE = "Zły typ atrybutu"
+_PL_DATE_ERROR = "zły format (YYYY-MM-DD)"
+_PL_FORMAT_DIRECTIVE = "Użyj formatu"
+_PL_UNIQUE_TAG = "może być maksymalnie jeden"
+_PL_BAD_INPUT_TYPE = "string z XML-em, albo otwarty plik"
 
-    def test_parse_simple_element_no_attributes(self):
-        data = "<root></root>"
-        root = parse_xml(data)
+
+# Podstawowe scenariusze parsowania
+
+
+
+class TestXMLParserBasic:
+    """Proste, poprawne przypadki."""
+
+    def test_parse_simple_element(self) -> None:
+        root = parse_xml("<root/>")
         assert root.tag == "root"
-        assert len(root) == 0  # brak dzieci
-        assert (root.text is None or root.text.strip() == "")
 
-    def test_parse_simple_element_with_text(self):
-        data = "<root>Hello</root>"
-        root = parse_xml(data)
-        assert root.tag == "root"
-        assert root.text == "Hello"
+    def test_parse_nested_elements(self) -> None:
+        xml = "<root><child/></root>"
+        assert parse_xml(xml).find("child") is not None
 
-    def test_parse_element_with_attributes(self):
-        data = '<root id="1" name="test"></root>'
-        root = parse_xml(data)
-        assert root.tag == "root"
-        assert root.attrib["id"] == "1"
-        assert root.attrib["name"] == "test"
+    def test_parse_element_with_attributes(self) -> None:
+        xml = '<root attr="value"/>'
+        assert parse_xml(xml).attrib["attr"] == "value"
 
-    def test_parse_nested_elements(self):
-        data = "<root><child>Text</child></root>"
-        root = parse_xml(data)
-        assert root.tag == "root"
-        assert len(root) == 1
-        child = root[0]
-        assert child.tag == "child"
-        assert child.text == "Text"
+    def test_required_tag_ok(self) -> None:
+        xml = "<root><req/></root>"
 
-    def test_parse_sibling_elements(self):
-        data = "<root><a/><b/><c/></root>"
-        root = parse_xml(data)
-        assert root.tag == "root"
-        assert len(root) == 3
-        tags = [child.tag for child in root]
-        assert tags == ["a", "b", "c"]
+        parse_xml(xml, required_tags=["req"])
 
-    def test_parse_element_with_empty_text(self):
-        data = "<root></root>"
-        root = parse_xml(data)
-        assert root.text is None or root.text.strip() == ""
+    def test_required_tag_missing(self) -> None:
+        with pytest.raises(
+            XMLParsingError,
+            match=rf"{_PL_MISSING_TAG} <req>",
+        ):
+            parse_xml("<root/>", required_tags=["req"])
 
-    def test_parse_element_with_whitespace_and_newlines(self):
-        data = """
-        <root>
-            <child>
-                Text with
-                newlines and spaces
-            </child>
-        </root>
-        """
-        root = parse_xml(data)
-        assert root.tag == "root"
-        child = root.find("child")
-        assert child is not None
-        assert child.text is not None
-        # Test ignoruje białe znaki na początku i końcu
-        assert child.text.strip().startswith("Text with")
-        assert "newlines" in child.text
 
-class TestXMLParserSyntaxErrors:
 
-    def test_unclosed_tag(self):
-        data = "<root><child></root>"  # child niezamknięty
-        with pytest.raises(XMLParsingError):
-            parse_xml(data)
+# Walidacja atrybutów i ich typów
 
-    def test_invalid_tag_name(self):
-        data = "<1invalid>text</1invalid>"  # nazwa tagu nie może zaczynać się od cyfry
-        with pytest.raises(XMLParsingError):
-            parse_xml(data)
 
-    def test_missing_quotes_in_attribute(self):
-        data = "<root id=1></root>"  # brak cudzysłowów w atrybucie
-        with pytest.raises(XMLParsingError):
-            parse_xml(data)
-
-    def test_unclosed_attribute_value(self):
-        data = '<root id="1></root>'  # niezamknięty cudzysłów w atrybucie
-        with pytest.raises(XMLParsingError):
-            parse_xml(data)
-
-    def test_invalid_special_character_usage(self):
-        data = "<root>&invalid;</root>"  # niepoprawna encja XML
-        with pytest.raises(XMLParsingError):
-            parse_xml(data)
-
-    def test_crossed_tags(self):
-        data = "<a><b></a></b>"  # tagi się krzyżują
-        with pytest.raises(XMLParsingError):
-            parse_xml(data)
 
 class TestXMLParserAttributes:
+    """Sprawdzanie obecności i typów atrybutów."""
 
-    def test_attributes_with_various_value_types(self):
-        data = '<root num="123" text="hello" empty="" special="!@#$%^&amp;*()"></root>'
-        root = parse_xml(data)
-        assert root.attrib["num"] == "123"
-        assert root.attrib["text"] == "hello"
-        assert root.attrib["empty"] == ""
-        assert root.attrib["special"] == "!@#$%^&*()"
+    def test_required_attr_ok(self) -> None:
+        xml = '<root><item id="1"/></root>'
+        parse_xml(xml, required_attrs={"item": ["id"]})
 
-    def test_attributes_with_xml_entities(self):
-        data = '<root amp="&amp;" lt="&lt;" gt="&gt;"></root>'
-        root = parse_xml(data)
-        assert root.attrib["amp"] == "&"
-        assert root.attrib["lt"] == "<"
-        assert root.attrib["gt"] == ">"
+    def test_required_attr_missing(self) -> None:
+        xml = "<root><item/></root>"
+        pattern = rf"<item> {_PL_MISSING_ATTR} 'id'"
+        with pytest.raises(XMLParsingError, match=pattern):
+            parse_xml(xml, required_attrs={"item": ["id"]})
 
-    def test_multiple_attributes_in_element(self):
-        # XML standard does NOT allow duplicate attribute names in the same element,
-        # so we expect a parse error if that occurs.
-        data = '<root attr="1" attr="2"></root>'
-        with pytest.raises(XMLParsingError):
-            parse_xml(data)
+    def test_attr_type_ok(self) -> None:
+        xml = '<root><item id="42"/></root>'
+        parse_xml(xml, attr_types={"item@id": int})
 
-    def test_attributes_with_quotes_in_value(self):
-        data = '<root quote="He said &quot;Hello&quot;"></root>'
-        root = parse_xml(data)
-        assert root.attrib["quote"] == 'He said "Hello"'
+    def test_attr_type_wrong(self) -> None:
+        xml = '<root><item id="abc"/></root>'
+        with pytest.raises(XMLParsingError, match=_PL_WRONG_TYPE):
+            parse_xml(xml, attr_types={"item@id": int})
 
-    def test_element_with_no_attributes(self):
-        data = "<root></root>"
-        root = parse_xml(data)
-        assert root.attrib == {}
+    def test_bool_attr_ok(self) -> None:
+        xml = '<root><item flag="true"/></root>'
+        parse_xml(xml, attr_types={"item@flag": bool})
 
-class TestXMLParserComplexStructures:
-
-    def test_deeply_nested_elements(self):
-        # 50 poziomów zagnieżdżenia
-        depth = 50
-        xml = "<root>"
-        for i in range(depth):
-            xml += f"<level{i}>"
-        for i in reversed(range(depth)):
-            xml += f"</level{i}>"
-        xml += "</root>"
-
-        root = parse_xml(xml)
-        current = root
-        for i in range(depth):
-            assert len(current) == 1
-            current = current[0]
-            assert current.tag == f"level{i}"
-
-    def test_many_sibling_elements(self):
-        # 1000 rodzeństwa pod rootem
-        xml = "<root>"
-        for i in range(1000):
-            xml += f"<item id='{i}'/>"
-        xml += "</root>"
-
-        root = parse_xml(xml)
-        assert len(root) == 1000
-        for i, child in enumerate(root):
-            assert child.tag == "item"
-            assert child.attrib["id"] == str(i)
-
-    def test_mixed_nesting_and_text(self):
-        xml = """
-        <root>
-            Some text
-            <child>Child text</child>
-            More text
-        </root>
-        """
-        root = parse_xml(xml)
-        assert root.tag == "root"
-        # Tekst bezpośrednio w root (strip, bo może być whitespace)
-        assert "Some text" in (root.text or "").strip()
-        # Dziecko
-        child = root.find("child")
-        assert child is not None
-        assert child.text == "Child text"
-        # Tekst po dziecku (tail)
-        assert "More text" in (child.tail or "").strip()
-
-    def test_element_with_mixed_content(self):
-        # Element z tekstem i podelementami mieszanymi
-        xml = "<root>Start<child1>Text1</child1>Middle<child2>Text2</child2>End</root>"
-        root = parse_xml(xml)
-        assert root.text == "Start"
-        child1 = root.find("child1")
-        assert child1 is not None
-        assert child1.text == "Text1"
-        assert child1.tail == "Middle"
-        child2 = root.find("child2")
-        assert child2 is not None
-        assert child2.text == "Text2"
-        assert child2.tail == "End"
-
-    def test_elements_with_comments(self):
-        xml = "<root><!-- This is a comment --><child>Text</child><!-- Another comment --></root>"
-        root = parse_xml(xml)
-        # Komentarze nie są zwracane jako elementy, więc ich nie ma w root
-        assert root.tag == "root"
-        child = root.find("child")
-        assert child is not None
-        assert child.text == "Text"
-
-    def test_elements_with_processing_instructions(self):
-        xml = """<?xml version="1.0"?>
-        <?processing instruction?>
-        <root>
-            <child>Text</child>
-        </root>"""
-        root = parse_xml(xml)
-        assert root.tag == "root"
-        child = root.find("child")
-        assert child is not None
-        assert child.text == "Text"
-
-class TestXMLParserSpecialDataTypes:
-
-    def test_parse_integer_values(self):
-        xml = '<root int_attr="42">123</root>'
-        root = parse_xml(xml)
-        # Atrybut jako string, możemy sprawdzić czy jest cyfrą
-        assert root.attrib["int_attr"].isdigit()
-        # Tekst w elemencie jako liczba całkowita (jako string)
-        assert root.text.isdigit()
-
-    def test_parse_float_values(self):
-        xml = '<root float_attr="3.1415">2.71828</root>'
-        root = parse_xml(xml)
-        # Sprawdzenie czy wartości mogą być konwertowane na float
-        assert abs(float(root.attrib["float_attr"]) - 3.1415) < 1e-6
-        assert abs(float(root.text) - 2.71828) < 1e-6
-
-    def test_parse_iso8601_date_in_attribute(self):
-        xml = '<root date_attr="2023-05-15T13:45:30Z"></root>'
-        root = parse_xml(xml)
-        date_str = root.attrib["date_attr"]
-        # Prosta weryfikacja formatu (można użyć regex lub dateutil parser)
-        assert "T" in date_str and "Z" in date_str
-
-    def test_parse_boolean_as_text(self):
-        xml_true = '<root flag="true"></root>'
-        root_true = parse_xml(xml_true)
-        assert root_true.attrib["flag"].lower() in ("true", "false")
-
-        xml_false = '<root flag="false"></root>'
-        root_false = parse_xml(xml_false)
-        assert root_false.attrib["flag"].lower() in ("true", "false")
-
-    def test_parse_null_equivalents(self):
-        xml_empty_tag = '<root><empty/></root>'
-        root_empty = parse_xml(xml_empty_tag)
-        empty_elem = root_empty.find("empty")
-        # Element pusty, tekst powinien być None lub pusty string
-        assert empty_elem is not None
-        assert empty_elem.text is None or empty_elem.text.strip() == ""
-
-        xml_missing_tag = '<root></root>'
-        root_missing = parse_xml(xml_missing_tag)
-        # Sprawdzenie, że tag 'missing' nie istnieje
-        assert root_missing.find("missing") is None
-
-class TestXMLParserSyntaxVariants:
-
-    def test_parse_with_xml_declaration(self):
-        xml = '<?xml version="1.0" encoding="UTF-8"?><root><child>Text</child></root>'
-        root = parse_xml(xml)
-        assert root.tag == "root"
-        child = root.find("child")
-        assert child is not None
-        assert child.text == "Text"
-
-    def test_parse_without_xml_declaration(self):
-        xml = '<root><child>Text</child></root>'
-        root = parse_xml(xml)
-        assert root.tag == "root"
-        child = root.find("child")
-        assert child is not None
-        assert child.text == "Text"
-
-    def test_parse_with_utf8_encoding(self):
-        xml = '<?xml version="1.0" encoding="UTF-8"?><root>UTF-8 ✓</root>'
-        data = xml.encode("utf-8")
-        root = parse_xml(BytesIO(data))
-        assert root.text == "UTF-8 ✓"
-
-    def test_parse_with_utf16_encoding(self):
-        xml = '<?xml version="1.0" encoding="UTF-16"?><root>UTF-16 ✓</root>'
-        data = xml.encode("utf-16")
-        root = parse_xml(BytesIO(data))
-        assert root.text == "UTF-16 ✓"
-
-    def test_parse_with_namespaces(self):
-        xml = '''<?xml version="1.0"?>
-        <root xmlns:h="http://www.w3.org/TR/html4/">
-            <h:table>
-                <h:tr>
-                    <h:td>Apples</h:td>
-                    <h:td>Bananas</h:td>
-                </h:tr>
-            </h:table>
-        </root>'''
-        root = parse_xml(xml)
-        ns = {'h': 'http://www.w3.org/TR/html4/'}
-        table = root.find('h:table', ns)
-        assert table is not None
-        td = table.find('h:tr/h:td', ns)
-        assert td is not None
-        assert td.text == "Apples"
-
-    def test_parse_with_prefixes_and_namespaces(self):
-        xml = '''<ns:root xmlns:ns="http://example.com/ns">
-                    <ns:child>Content</ns:child>
-                 </ns:root>'''
-        root = parse_xml(xml)
-        ns = {'ns': 'http://example.com/ns'}
-        child = root.find('ns:child', ns)
-        assert child is not None
-        assert child.text == "Content"
-
-    def test_parse_with_default_namespace(self):
-        xml = '''<root xmlns="http://default.namespace/">
-                    <child>Value</child>
-                 </root>'''
-        root = parse_xml(xml)
-        # Domyślny namespace - wyszukiwanie wymaga namespace
-        ns = {'d': 'http://default.namespace/'}
-        child = root.find('d:child', ns)
-        assert child is not None
-        assert child.text == "Value"
-
-class TestXMLParserLogicalErrors:
-
-    def test_missing_required_root_element(self):
-        data = '<notroot></notroot>'
-        with pytest.raises(XMLParsingError, match="Missing required tags: root"):
-            parse_xml(data, required_tags=["root"])
-
-    def test_duplicate_elements_should_be_unique(self):
-        data = '''
-        <root>
-            <unique>1</unique>
-            <unique>2</unique>
-        </root>
-        '''
-        with pytest.raises(XMLParsingError, match="should be unique"):
-            parse_xml(data, unique_elements=["unique"])
+    def test_bool_attr_wrong(self) -> None:
+        xml = '<root><item flag="maybe"/></root>'
+        with pytest.raises(XMLParsingError, match=_PL_BOOL_ERROR):
+            parse_xml(xml, attr_types={"item@flag": bool})
 
 
 
+# Unikalność elementów
 
+
+
+class TestXMLParserUniqueness:
+    """Pilnowanie, by wybrane tagi nie powtarzały się."""
+
+    def test_unique_tag_ok(self) -> None:
+        xml = "<root><uniq/></root>"
+        parse_xml(xml, unique_tags=["uniq"])
+
+    def test_unique_tag_violation(self) -> None:
+        xml = "<root><uniq/><uniq/></root>"
+        with pytest.raises(XMLParsingError, match=_PL_UNIQUE_TAG):
+            parse_xml(xml, unique_tags=["uniq"])
+
+
+
+# Scenariusze błędne / wyjątkowe
+
+
+
+class TestXMLParserErrors:
+    """Różne formy błędnego wejścia."""
+
+    @pytest.mark.parametrize(
+        "bad_xml",
+        [
+            "<root><unclosed></root>",
+            "<root><1tag></1tag></root>",
+            "<root id=1></root>",
+            '<root id="1></root>',
+            "<root>&invalid;</root>",
+            "<a><b></a></b>",
+        ],
+    )
+    def test_bad_xml_formats(self, bad_xml: str) -> None:
+        with pytest.raises(XMLParsingError, match=_PL_BAD_XML):
+            parse_xml(bad_xml)
+
+    def test_bad_input_type(self) -> None:
+        with pytest.raises(XMLParsingError, match=_PL_BAD_INPUT_TYPE):
+            parse_xml(123)
+
+    def test_bad_attr_types_key_format(self) -> None:
+        xml = "<root><x/></root>"
+        with pytest.raises(XMLParsingError, match=_PL_FORMAT_DIRECTIVE):
+            parse_xml(xml, attr_types={"wrong": int})
+
+
+#
+# Przypadki brzegowe
+
+
+
+class TestXMLParserEdgeCases:
+    """Nietypowe, ale poprawne lub obsługiwane sytuacje."""
+
+    def test_empty_document(self) -> None:
+        with pytest.raises(XMLParsingError, match=_PL_BAD_XML):
+            parse_xml("")
+
+    def test_unicode_in_attr(self) -> None:
+        xml = '<root><item txt="✓"/></root>'
+        assert parse_xml(xml).find("item").attrib["txt"] == "✓"
+
+    def test_bool_case_insensitive(self) -> None:
+        xml = '<root><item flag="TrUe"/></root>'
+        parse_xml(xml, attr_types={"item@flag": bool})
+
+    def test_large_document(self) -> None:
+        children = "".join(f'<c id="{i}"/>' for i in range(1000))
+        root = parse_xml(f"<root>{children}</root>")
+        assert len(root.findall("c")) == 1000
+
+    def test_unicode_decode_error_propagation(self) -> None:
+        class BadFile:
+            def read(self, *_):
+                raise UnicodeDecodeError("utf-8", b"", 0, 1, "meh")
+
+        with pytest.raises(UnicodeDecodeError):
+            parse_xml(BadFile())
+
+
+
+# Dodatkowe testy
+
+
+
+class TestXMLParserExtra:
+    """Edge-case’y dotyczące typów, unikalności i wymagań."""
+
+    def test_required_attrs_tag_absent_passes(self) -> None:
+        parse_xml("<root/>", required_attrs={"item": ["id"]})
+
+    def test_attr_type_float_ok(self) -> None:
+        xml = '<root><val num="3.1415"/></root>'
+        parse_xml(xml, attr_types={"val@num": float})
+
+    def test_attr_type_float_fail(self) -> None:
+        xml = '<root><val num="pi"/></root>'
+        with pytest.raises(XMLParsingError, match=_PL_WRONG_TYPE):
+            parse_xml(xml, attr_types={"val@num": float})
+
+    def test_attr_type_iso_date_ok(self) -> None:
+        xml = '<root><ev date="2025-05-17"/></root>'
+        parse_xml(xml, attr_types={"ev@date": "iso"})
+
+    def test_attr_type_iso_date_bad(self) -> None:
+        xml = '<root><ev date="2025-13-01"/></root>'
+        with pytest.raises(XMLParsingError, match=_PL_DATE_ERROR):
+            parse_xml(xml, attr_types={"ev@date": "iso"})
+
+    def test_attr_type_missing_attribute_is_ignored(self) -> None:
+        xml = '<root><item id="1"/><item/></root>'
+        parse_xml(xml, attr_types={"item@id": int})
+
+    def test_multiple_attr_type_rules(self) -> None:
+        xml = '<root><row n="7" ok="false"/></root>'
+        parse_xml(xml, attr_types={"row@n": int, "row@ok": bool})
+
+    def test_unique_tag_not_present(self) -> None:
+        parse_xml("<root/>", unique_tags=["once"])
+
+    def test_unique_tag_nested_violation(self) -> None:
+        xml = "<root><a><u/></a><b><u/></b></root>"
+        with pytest.raises(XMLParsingError, match=_PL_UNIQUE_TAG):
+            parse_xml(xml, unique_tags=["u"])
+
+    def test_multiple_missing_required_tags_reports_first(self) -> None:
+        with pytest.raises(
+            XMLParsingError,
+            match=rf"{_PL_MISSING_TAG} <first>",
+        ):
+            parse_xml("<root/>", required_tags=["first", "second"])

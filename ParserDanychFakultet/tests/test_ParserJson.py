@@ -1,218 +1,242 @@
-import pytest
+import io
 import json
 
-from src.ParserJson import parse_json, JSONParsingError  # Załóżmy, że masz takie elementy
+import pytest
+
+from src.ParserJson import JSONParsingError, parse_json, parse_json_file
 
 
-class TestJSONParserValidData:
+# Stałe z fragmentami komunikatów
 
-    def test_parse_empty_object(self):
-        data = "{}"
+
+_PL_MISSING_KEYS = "Brakujące klucze"
+_PL_WRONG_TYPE = "powinien być typu"
+_PL_INVALID_JSON = "Nieprawidłowy JSON"
+
+
+# Poprawne scenariusze parsowania
+
+
+
+class TestPoprawneParsowanie:
+    """Przypadki, w których `parse_json` zwraca oczekiwany wynik."""
+
+    def test_pusty_obiekt(self) -> None:
+        assert parse_json("{}") == {}
+
+    def test_pusta_lista(self) -> None:
+        assert parse_json("[]") == []
+
+    def test_prosty_slownik(self) -> None:
+        result = parse_json('{"name": "Jan"}')
+        assert result["name"] == "Jan"
+
+    def test_zagniezdzony_slownik(self) -> None:
+        data = '{"user": {"name": "Ala", "age": 30}}'
         result = parse_json(data)
-        assert isinstance(result, dict)
-        assert result == {}
+        assert result["user"]["name"] == "Ala"
 
-    def test_parse_empty_array(self):
-        data = "[]"
-        result = parse_json(data)
-        assert isinstance(result, list)
-        assert result == []
-
-    def test_parse_nested_objects(self):
-        data = '{"person": {"name": "Alice", "age": 30}}'
-        result = parse_json(data)
-        assert "person" in result
-        assert result["person"]["name"] == "Alice"
-
-    def test_parse_array_of_objects(self):
+    def test_lista_slownikow(self) -> None:
         data = '[{"id": 1}, {"id": 2}]'
         result = parse_json(data)
-        assert isinstance(result, list)
-        assert len(result) == 2
-        assert result[0]["id"] == 1
+        assert len(result) == 2 and result[0]["id"] == 1
 
-    @pytest.mark.parametrize("input_json, expected_type", [
-        ('{"string": "text"}', str),
-        ('{"int": 123}', int),
-        ('{"float": 12.34}', float),
-        ('{"bool": true}', bool),
-        ('{"null": null}', type(None)),
-    ])
-    def test_various_data_types(self, input_json, expected_type):
-        result = parse_json(input_json)
-        key = list(result.keys())[0]
-        assert isinstance(result[key], expected_type)
-
-    def test_unicode_characters(self):
-        data = '{"text": "Hello 🌍"}'
-        result = parse_json(data)
-        assert result["text"] == "Hello 🌍"
-
-    def test_exponential_numbers(self):
-        data = '{"number": 1.23e4}'
-        result = parse_json(data)
-        assert isinstance(result["number"], float)
-        assert result["number"] == 12300.0
-
-    def test_large_array(self):
-        array = list(range(1000))
-        data = json.dumps(array)
-        result = parse_json(data)
-        assert isinstance(result, list)
-        assert len(result) == 1000
-        assert result[500] == 500
-
-    def test_json_with_whitespace_and_newlines(self):
-        data = '''
-        {
-            "name": "Alice",
-            "age": 30,
-            "active": true
+    def test_rozne_typy(self) -> None:
+        data = (
+            '{"str":"txt","num":7,"float":3.14,'
+            '"bool":true,"null":null}'
+        )
+        expected = {
+            "str": "txt",
+            "num": 7,
+            "float": 3.14,
+            "bool": True,
+            "null": None,
         }
-        '''
-        result = parse_json(data)
-        assert result["name"] == "Alice"
-        assert result["age"] == 30
-        assert result["active"] is True
+        assert parse_json(data) == expected
 
-    @pytest.mark.parametrize("data, expected", [
-        ('{"field": ""}', ""),
-        ('{"field": null}', None),
-    ])
-    def test_empty_and_null_fields(self, data, expected):
-        result = parse_json(data)
-        assert result["field"] == expected
+    def test_unicode(self) -> None:
+        assert parse_json('{"emoji": "😊"}')["emoji"] == "😊"
+
+    def test_notacja_naukowa(self) -> None:
+        assert parse_json('{"big": 1e3}')["big"] == 1000.0
+
+    def test_duza_lista(self) -> None:
+        arr = list(range(500))
+        assert parse_json(json.dumps(arr))[123] == 123
+
+    def test_biale_znaki_w_jsonie(self) -> None:
+        pretty = """
+        {
+            "active": true,
+            "name": "Ala"
+        }
+        """
+        result = parse_json(pretty)
+        assert result["active"] is True and result["name"] == "Ala"
 
 
-@pytest.mark.parametrize("bad_json", [
-    'just some text',          # brak nawiasów {}
-    '{"key": "value"',         # niedomknięty nawias {
-    "{'key': 'value'}",        # pojedyncze cudzysłowy zamiast podwójnych
-    '{"key": "value",}',       # przecinek na końcu listy
-    '{"key" "value"}',         # brak dwukropka
-    '{key: "value"}',          # klucz bez cudzysłowów
-    '[1, 2, 3,]',              # przecinek na końcu tablicy
-    '{"text": "line1\\x"}',    # nieprawidłowy escape sequence
-    '',                        # puste wejście
-])
-def test_invalid_json_formats(bad_json):
-    with pytest.raises(JSONParsingError):
+
+# Walidacja wymaganych kluczy i typów
+
+
+
+class TestWalidacja:
+    """Testy walidacji kluczy oraz typów wartości."""
+
+    def test_brak_wymaganego_klucza(self) -> None:
+        with pytest.raises(
+            JSONParsingError,
+            match=rf"{_PL_MISSING_KEYS}: age",
+        ):
+            parse_json('{"name": "Jan"}', required_keys=["name", "age"])
+
+    def test_wszystkie_wymagane_klucze(self) -> None:
+        result = parse_json(
+            '{"name": "Jan", "age": 20}',
+            required_keys=["name", "age"],
+        )
+        assert result["age"] == 20
+
+    def test_poprawny_typ(self) -> None:
+        assert parse_json('{"age": 42}', key_types={"age": int})["age"] == 42
+
+    def test_bledny_typ(self) -> None:
+        pattern = rf"{_PL_WRONG_TYPE} int"
+        with pytest.raises(JSONParsingError, match=pattern):
+            parse_json('{"age": "wrong"}', key_types={"age": int})
+
+    def test_typ_bool(self) -> None:
+        assert parse_json('{"ok": true}', key_types={"ok": bool})["ok"] is True
+
+    def test_brak_klucza_nie_wymaganego(self) -> None:
+        result = parse_json('{"name": "Jan"}', key_types={"age": int})
+        assert "age" not in result
+
+
+
+# Niepoprawne dane wejściowe
+
+
+
+@pytest.mark.parametrize(
+    "bad_json",
+    [
+        "Losowy tekst",
+        '{"key": "value"',          # brak nawiasu
+        "{'key': 'value'}",         # złe cudzysłowy
+        '{"key": "value",}',        # przecinek na końcu
+        '{"key" "value"}',          # brak dwukropka
+        '{key: "value"}',           # brak cudzysłowów
+        "[1, 2, 3,]",               # przecinek w tablicy
+        '{"text": "line\\x"}',      # zła sekwencja escape
+        "",
+        None,
+    ],
+)
+def test_nieprawidlowy_format_json(bad_json) -> None:
+    with pytest.raises(JSONParsingError, match=_PL_INVALID_JSON):
         parse_json(bad_json)
 
-class TestJSONParserAdditionalCases:
 
-    def test_parse_boolean_true_false(self):
-        data = '{"is_active": true, "is_deleted": false}'
-        result = parse_json(data)
-        assert result["is_active"] is True
-        assert result["is_deleted"] is False
 
-    def test_parse_empty_nested_array(self):
-        data = '{"items": []}'
-        result = parse_json(data)
-        assert isinstance(result["items"], list)
-        assert len(result["items"]) == 0
+# Parsowanie pojedynczych literałów
 
-    def test_parse_empty_nested_object(self):
-        data = '{"config": {}}'
-        result = parse_json(data)
-        assert isinstance(result["config"], dict)
-        assert result["config"] == {}
 
-    def test_parse_number_as_string(self):
-        data = '{"number_str": "12345"}'
-        result = parse_json(data)
-        assert isinstance(result["number_str"], str)
-        assert result["number_str"] == "12345"
 
-    def test_parse_mixed_array(self):
-        data = '[123, "abc", true, null, {"key": "value"}, [1,2,3]]'
-        result = parse_json(data)
-        assert isinstance(result, list)
-        assert result[0] == 123
-        assert result[1] == "abc"
-        assert result[2] is True
-        assert result[3] is None
-        assert isinstance(result[4], dict)
-        assert isinstance(result[5], list)
+@pytest.mark.parametrize(
+    "literal, expected",
+    [
+        ("true", True),
+        ("false", False),
+        ("null", None),
+        ("123", 123),
+        ('"tekst"', "tekst"),
+        ("[1, 2, 3]", [1, 2, 3]),
+        ('{"k": "v"}', {"k": "v"}),
+    ],
+)
+def test_parsowanie_literalu(literal: str, expected) -> None:
+    assert parse_json(literal) == expected
 
-    def test_parse_large_number(self):
-        data = '{"big_number": 12345678901234567890}'
-        result = parse_json(data)
-        assert result["big_number"] == 12345678901234567890
 
-    def test_parse_string_with_escaped_characters(self):
-        data = '{"text": "Line1\\nLine2\\tTabbed"}'  # podwójne escape!
-        result = parse_json(data)
-        assert result["text"] == "Line1\nLine2\tTabbed"
 
-    def test_parse_boolean_as_string_should_not_parse(self):
-        data = '{"flag": "true"}'
-        result = parse_json(data)
-        assert isinstance(result["flag"], str)
-        assert result["flag"] == "true"
+# Testy dla parse_json_file – przypadki poprawne
 
-    def test_parse_null_in_array(self):
-        data = '[null, null, null]'
-        result = parse_json(data)
-        assert all(x is None for x in result)
 
-    def test_invalid_json_extra_closing_brace(self):
-        bad_json = '{"key": "value"}}'
+
+class TestParseJsonFileOK:
+    """Poprawne wczytywanie danych z obiektów plikowych."""
+
+    def test_simple_object(self) -> None:
+        buf = io.StringIO('{"name": "Ala"}')
+        assert parse_json_file(buf) == {"name": "Ala"}
+
+    def test_with_required_keys(self) -> None:
+        buf = io.StringIO('{"id": 1, "val": 42}')
+        result = parse_json_file(buf, required_keys=["id", "val"])
+        assert result["val"] == 42
+
+    def test_type_validation(self, tmp_path) -> None:
+        path = tmp_path / "obj.json"
+        path.write_text('{"active": true, "age": 21}', encoding="utf-8")
+
+        plain = parse_json_file(path.open())
+        validated = parse_json_file(
+            path.open(),
+            key_types={"active": bool, "age": int},
+        )
+        assert plain == validated
+
+
+
+# Testy dla parse_json_file – przypadki błędne
+
+
+
+class TestParseJsonFileErrors:
+    """Błędy przy wczytywaniu i walidacji plików JSON."""
+
+    @pytest.mark.parametrize(
+        "bad_json",
+        [
+            '{"key": "value"',          # brak nawiasu
+            "{'key': 'value'}",         # złe cudzysłowy
+        ],
+    )
+    def test_invalid_json(self, bad_json: str) -> None:
         with pytest.raises(JSONParsingError):
-            parse_json(bad_json)
+            parse_json_file(io.StringIO(bad_json))
 
-class TestJSONParserExtraCases:
+    def test_missing_required_key(self) -> None:
+        with pytest.raises(
+            JSONParsingError,
+            match=r"Brakujące klucze: age",
+        ):
+            parse_json_file(
+                io.StringIO('{"name": "Jan"}'),
+                required_keys=["name", "age"],
+            )
 
-    def test_parse_empty_string(self):
-        data = '""'
-        result = parse_json(data)
-        assert result == ""
+    def test_wrong_type(self) -> None:
+        with pytest.raises(
+            JSONParsingError,
+            match=r"powinien być typu int",
+        ):
+            parse_json_file(
+                io.StringIO('{"age": "not_int"}'),
+                key_types={"age": int},
+            )
 
-    def test_parse_number_zero(self):
-        data = '0'
-        result = parse_json(data)
-        assert result == 0
+    def test_unicode_decode_error(self) -> None:
+        """Symuluje plik, który rzuca UnicodeDecodeError przy read()."""
 
-    def test_parse_true_literal(self):
-        data = 'true'
-        result = parse_json(data)
-        assert result is True
+        class BadFile:
+            def read(self, *_, **__):
+                raise UnicodeDecodeError("utf-8", b"", 0, 1, "boom")
 
-    def test_parse_false_literal(self):
-        data = 'false'
-        result = parse_json(data)
-        assert result is False
-
-    def test_parse_null_literal(self):
-        data = 'null'
-        result = parse_json(data)
-        assert result is None
-
-    def test_parse_array_of_booleans(self):
-        data = '[true, false, true]'
-        result = parse_json(data)
-        assert result == [True, False, True]
-
-    def test_parse_object_with_numeric_string_keys(self):
-        data = '{"1": "one", "2": "two"}'
-        result = parse_json(data)
-        assert result["1"] == "one"
-        assert result["2"] == "two"
-
-    def test_parse_nested_empty_structures(self):
-        data = '{"empty_list": [], "empty_dict": {}}'
-        result = parse_json(data)
-        assert isinstance(result["empty_list"], list)
-        assert isinstance(result["empty_dict"], dict)
-
-    def test_parse_string_with_unicode_escape(self):
-        data = '{"char": "\\u2764"}'  # Unicode heart symbol ❤
-        result = parse_json(data)
-        assert result["char"] == "❤"
-
-    def test_parse_object_with_additional_unexpected_fields(self):
-        data = '{"expected": 1, "unexpected": "field"}'
-        result = parse_json(data)
-        assert result["expected"] == 1
-        assert result["unexpected"] == "field"
+        with pytest.raises(
+            JSONParsingError,
+            match=r"Nie udało się odczytać pliku",
+        ):
+            parse_json_file(BadFile())

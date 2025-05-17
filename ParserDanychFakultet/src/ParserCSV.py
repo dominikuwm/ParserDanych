@@ -1,105 +1,125 @@
 import csv
 import re
-from typing import List, Dict, Optional, TextIO
+from typing import Dict, List, Optional, TextIO
 
 
 class CSVParsingError(Exception):
-    """Custom exception for CSV parsing errors."""
+    """Błąd podczas parsowania CSV."""
     pass
 
-def parse_csv_file(file_path: str, required_fields: Optional[List[str]] = None, delimiter: str = ',') -> List[Dict[str, str]]:
+
+def parse_csv_file(
+    sciezka: str,
+    wymagane_pola: Optional[List[str]] = None,
+    separator: str = ",",
+) -> List[Dict[str, str]]:
+
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return parse_csv(f, required_fields=required_fields, delimiter=delimiter)
+        with open(sciezka, "r", encoding="utf-8") as plik:
+            return parse_csv(plik, wymagane_pola, separator)
     except FileNotFoundError:
-        raise  # Pozwól na propagację, by test mógł złapać ten wyjątek
+        # pozwalamy, by testy wychwyciły FileNotFoundError
+        raise
 
 
 def parse_csv(
-    file_obj: TextIO,
-    required_fields: Optional[List[str]] = None,
-    delimiter: str = ','
+    plik: TextIO,
+    wymagane_pola: Optional[List[str]] = None,
+    separator: str = ",",
 ) -> List[Dict[str, str]]:
-    """
-    Parses a CSV file and returns a list of dictionaries.
 
-    :param file_obj: File-like object containing CSV data.
-    :param required_fields: List of required fields to validate. If None, all header fields are treated as required.
-    :param delimiter: Delimiter used in the CSV file.
-    :return: List of dictionaries representing CSV rows.
-    :raises CSVParsingError: If parsing fails or validation fails.
-    """
     try:
-        # Pre-scan for empty lines if possible
+        #1. Skan pustych wierszy
         try:
-            lines = file_obj.readlines()
-            for idx, line in enumerate(lines, start=1):
-                if not line.strip() and idx != 1:  # Skip header line
-                    raise CSVParsingError(f"Empty line detected at line {idx}.")
-            file_obj.seek(0)
+            for idx, line in enumerate(plik.readlines(), start=1):
+                if not line.strip() and idx != 1:
+                    raise CSVParsingError(
+                        f"Pusta linia wykryta w wierszu {idx}."
+                    )
+            plik.seek(0)
         except AttributeError:
-            # File-like object doesn't support readlines or seek; ignore pre-scan
+            # Obiekt nie wspiera readlines/seek pomijamy skan
             pass
 
-        reader = csv.DictReader(file_obj, delimiter=delimiter, skipinitialspace=True)
-
-        if not reader.fieldnames:
-            raise CSVParsingError("CSV file has no header row.")
-
-        # --- Header validations ---
-        if all(field.strip().isdigit() or not field.strip() for field in reader.fieldnames):
+        reader = csv.DictReader(
+            plik,
+            delimiter=separator,
+            skipinitialspace=True,
+        )
+        naglowki = reader.fieldnames
+        if not naglowki:
             raise CSVParsingError(
-                "CSV header row looks invalid or missing (contains only numeric or empty values)."
+                "Brak wiersza nagłówka w pliku CSV."
             )
 
-        if any(re.match(r"^\d", field.strip()) for field in reader.fieldnames):
+        #2. Walidacja nagłówka
+        if all(h.strip().isdigit() or not h.strip() for h in naglowki):
             raise CSVParsingError(
-                f"CSV header row contains invalid column names: {', '.join(reader.fieldnames)}. "
-                "Column names should not start with a digit."
+                "Nagłówek wygląda niepoprawnie (tylko liczby lub puste)."
             )
 
-        if any(" " in field.strip() for field in reader.fieldnames):
+        if any(re.match(r"^\d", h.strip()) for h in naglowki):
             raise CSVParsingError(
-                f"CSV header row contains spaces in column names: {', '.join(reader.fieldnames)}."
+                f"Niewłaściwe nazwy kolumn: {', '.join(naglowki)}. "
+                "Nazwy nie mogą zaczynać się od cyfry."
             )
 
-        if len(reader.fieldnames) != len(set(reader.fieldnames)):
+        if any(" " in h for h in naglowki):
             raise CSVParsingError(
-                f"CSV header row contains duplicate column names: {', '.join(reader.fieldnames)}."
+                f"Nazwy kolumn zawierają spacje: {', '.join(naglowki)}."
             )
 
-        if required_fields is None:
-            required_fields = reader.fieldnames
+        if len(naglowki) != len(set(naglowki)):
+            raise CSVParsingError(
+                f"Powtórzone nazwy kolumn: {', '.join(naglowki)}."
+            )
 
-        missing_fields = [field for field in required_fields if field not in reader.fieldnames]
-        if missing_fields:
-            raise CSVParsingError(f"Missing required fields in header: {', '.join(missing_fields)}")
+        #3. Sprawdzenie wymaganych pól
+        if wymagane_pola is None:
+            wymagane_pola = naglowki.copy()
 
-        data = []
-        for line_number, row in enumerate(reader, start=2):
-            # 🛑 Check for extra columns
+        brakujace = [p for p in wymagane_pola if p not in naglowki]
+        if brakujace:
+            raise CSVParsingError(
+                f"Brakujące pola w nagłówku: {', '.join(brakujace)}."
+            )
+
+        #4. Iteracja po danych
+        dane: List[Dict[str, str]] = []
+        for idx, row in enumerate(reader, start=2):
             if None in row:
-                raise CSVParsingError(f"Extra columns found at line {line_number}.")
-
-            # 🛑 Validate required fields are not empty or just spaces
-            missing_values = [
-                field for field in required_fields
-                if not row.get(field) or not row.get(field).strip()
-            ]
-            if missing_values:
                 raise CSVParsingError(
-                    f"Missing required values in fields: {', '.join(missing_values)} at line {line_number}."
+                    f"Dodatkowe kolumny w wierszu {idx}."
                 )
 
-            data.append(row)
+            puste = [
+                p
+                for p in wymagane_pola
+                if not row.get(p) or not row[p].strip()
+            ]
+            if puste:
+                raise CSVParsingError(
+                    f"Brak wartości w polach: {', '.join(puste)} "
+                    f"w wierszu {idx}."
+                )
 
-        return data
+            dane.append(row)
 
-    except UnicodeDecodeError:
-        raise CSVParsingError("Unable to decode CSV file. Please check encoding.")
-    except csv.Error as e:
-        raise CSVParsingError(f"CSV parsing error: {str(e)}")
-    except Exception as e:
-        if isinstance(e, TypeError) and 'iterable' in str(e):
-            raise CSVParsingError("Unable to decode CSV file. Please check encoding or file object validity.")
-        raise CSVParsingError(f"An unexpected error occurred: {str(e)}")
+        return dane
+
+    except UnicodeDecodeError as exc:
+        raise CSVParsingError(
+            "Nie można odczytać pliku CSV (błąd kodowania)."
+        ) from exc
+    except csv.Error as exc:
+        raise CSVParsingError(
+            f"Błąd parsowania CSV: {exc}"
+        ) from exc
+    except TypeError as exc:
+        raise CSVParsingError(
+            "Nieprawidłowy obiekt pliku CSV."
+        ) from exc
+    except Exception as exc:
+        raise CSVParsingError(
+            f"Nieoczekiwany błąd: {exc}"
+        ) from exc

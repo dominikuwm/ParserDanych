@@ -1,396 +1,381 @@
-import pytest
 import io
-from src.ParserCSV import parse_csv, CSVParsingError
 import time
 
+import pytest
 
-#testy dla poprawnych danych
-class TestCSVParserCorrectData:
+from src.ParserCSV import CSVParsingError, parse_csv, parse_csv_file
 
-    @pytest.mark.parametrize("csv_content, delimiter", [
-        # Test 1: Standardowy CSV z przecinkiem jako separatorem
-        ("id,name,age\n1,Alice,30\n2,Bob,25", ","),
 
-        # Test 2: CSV z separatorem '|'
-        ("id|name|age\n1|Alice|30\n2|Bob|25", "|"),
+# Poprawne dane wejściowe
 
-        # Test 3: CSV z separatorem ';'
-        ("id;name;age\n1;Alice;30\n2;Bob;25", ";"),
 
-        # Test 4: CSV z separatorem tabulacji
-        ("id\tname\tage\n1\tAlice\t30\n2\tBob\t25", "\t"),
 
-        # Test 5: CSV z separatorem '#'
-        ("id#name#age\n1#Alice#30\n2#Bob#25", "#"),
+class TestCSVParserValidData:
+    """Scenariusze, w których parser zwraca poprawne wyniki."""
 
-        # Test 6: CSV z separatorem '~'
-        ("id~name~age\n1~Alice~30\n2~Bob~25", "~"),
-    ])
-    def test_valid_csv_with_various_separators(self, csv_content: str, delimiter: str):
-        """Test poprawnych danych z różnymi separatorami."""
+    @pytest.mark.parametrize(
+        ("csv_content", "separator"),
+        [
+            ("id,name,age\n1,Alice,30\n2,Bob,25", ","),
+            ("id|name|age\n1|Alice|30\n2|Bob|25", "|"),
+            ("id;name;age\n1;Alice;30\n2;Bob;25", ";"),
+            ("id\tname\tage\n1\tAlice\t30\n2\tBob\t25", "\t"),
+            ("id#name#age\n1#Alice#30\n2#Bob#25", "#"),
+            ("id~name~age\n1~Alice~30\n2~Bob~25", "~"),
+        ],
+    )
+    def test_various_separators(
+        self,
+        csv_content: str,
+        separator: str,
+    ) -> None:
         file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"], delimiter=delimiter)
+        result = parse_csv(
+            file_obj,
+            wymagane_pola=["id", "name", "age"],
+            separator=separator,
+        )
         assert len(result) == 2
         assert result[0]["name"] == "Alice"
         assert result[1]["age"] == "25"
 
-    def test_large_csv_file(self):
-        """Test poprawnego działania na dużym pliku (1000+ rekordów)."""
-        csv_content = "\n".join(["id,name,age"] + [f"{i},User{i},{20+i}" for i in range(1000)])
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"])
+    def test_large_file(self) -> None:
+        header = "id,name,age"
+        rows = [f"{i},User{i},{20 + i}" for i in range(1000)]
+        content = "\n".join([header] + rows)
+        result = parse_csv(
+            io.StringIO(content),
+            wymagane_pola=["id", "name", "age"],
+        )
         assert len(result) == 1000
         assert result[500]["name"] == "User500"
 
-    def test_csv_with_special_characters(self):
-        """Test poprawnego działania z nietypowymi znakami w polach (przecinki, emoji, cudzysłowy)."""
-        csv_content = 'id,name,comment\n1,Alice,"Hello, World! 🌍"\n2,Bob,"Nice : )"'
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "comment"])
-        assert result[0]["comment"] == "Hello, World! 🌍"
+    def test_quoted_fields_with_commas(self) -> None:
+        csv_ = (
+            'id,name,comment\n1,Alice,"Hello, World!"\n2,Bob,"Nice : )"'
+        )
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "name", "comment"],
+        )
+        assert result[0]["comment"] == "Hello, World!"
         assert result[1]["comment"] == "Nice : )"
 
-    def test_csv_with_various_data_types(self):
-        """Test poprawnych danych z różnymi typami danych (int, bool, str)."""
-        csv_content = "id,name,is_active,age\n1,Alice,True,30\n2,Bob,False,25"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "is_active", "age"])
+    def test_optional_empty_column(self) -> None:
+        csv_ = (
+            "id,name,email\n1,Alice,alice@example.com\n2,Bob,"
+        )
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "name"],
+        )
+        assert result[1]["email"] == ""
+
+    def test_types_as_strings(self) -> None:
+        csv_ = (
+            "id,name,is_active,age\n1,Alice,True,30\n2,Bob,False,25"
+        )
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "name", "is_active", "age"],
+        )
+        assert isinstance(result[0]["is_active"], str)
         assert result[0]["is_active"] == "True"
         assert result[1]["age"] == "25"
 
-    def test_csv_with_optional_empty_columns(self):
-        """Test poprawnych plików z pustymi nieobowiązkowymi kolumnami."""
-        csv_content = "id,name,email\n1,Alice,alice@example.com\n2,Bob,"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name"], delimiter=",")
-        assert len(result) == 2
-        assert result[1]["email"] == ""  # Pole opcjonalne jest puste, ale parser nie zgłasza błędu
-#testy dla niepoprawnych naglowkow
-class TestCSVParserInvalidHeaders:
+    def test_unicode_and_emoji(self) -> None:
+        csv_ = "id,name,emoji\n1,Alice,🌍\n2,Bob,✓"
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "name", "emoji"],
+        )
+        assert result[0]["emoji"] == "🌍"
+        assert result[1]["emoji"] == "✓"
 
-    def test_missing_header(self):
-        """Test braku nagłówka — pierwszy wiersz wygląda jak dane, nie jak nazwy kolumn."""
-        csv_content = "1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="header"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+    def test_very_long_field(self) -> None:
+        long_str = "x" * 1200
+        csv_ = f"id,name,long\n1,Alice,{long_str}"
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "name", "long"],
+        )
+        assert len(result[0]["long"]) == 1200
 
-    def test_header_with_only_numbers(self):
-        """Test, gdy nagłówki zawierają wyłącznie liczby — parser powinien uznać to za brak nagłówka."""
-        csv_content = "1,2,3\n1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="header"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+    def test_mixed_case_data(self) -> None:
+        csv_ = "id,Name,Age\n1,alice,30\n2,BOB,25"
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "Name", "Age"],
+        )
+        assert result[0]["Name"] == "alice"
+        assert result[1]["Age"] == "25"
 
-    def test_empty_header_fields(self):
-        """Test pustych nagłówków (brak nazw kolumn)."""
-        csv_content = ",,\n1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="header"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
 
-    def test_header_with_invalid_characters(self):
-        """Test nagłówków z niedozwolonymi znakami (np. znaki specjalne)."""
-        csv_content = "id,na$me,ag@e\n1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        # Parser powinien pozwolić na dziwne nagłówki lub rzucić błąd — zależnie od założeń.
-        with pytest.raises(CSVParsingError):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
 
-    def test_header_starting_with_digit(self):
-        """Test nagłówków zaczynających się od cyfry (np. '1name')."""
-        csv_content = "1name,name,age\n1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="invalid column names"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+# Walidacja nagłówka
 
-    def test_duplicate_column_names(self):
-        """Test duplikujących się nazw kolumn."""
-        csv_content = "id,name,name\n1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="duplicate"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
 
-    def test_missing_required_columns(self):
-        """Test braku wymaganych kolumn w nagłówku."""
-        csv_content = "id,name\n1,Alice\n2,Bob"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="Missing required fields"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
 
-    def test_additional_unnecessary_columns(self):
-        """Test nadmiarowych, niepotrzebnych kolumn. Parser powinien je ignorować, jeśli nie są wymagane."""
-        csv_content = "id,name,age,extra_column\n1,Alice,30,something\n2,Bob,25,extra"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-        # Nie powinno być błędu, ale dodatkowa kolumna powinna istnieć w danych.
-        assert "extra_column" in result[0]
-        assert result[0]["extra_column"] == "something"
+class TestCSVParserHeaderValidation:
+    """Błędy związane z wierszem nagłówka."""
 
-    def test_header_with_spaces_in_names(self):
-        """Test nagłówków zawierających spacje (np. 'first name')."""
-        csv_content = "id,first name,age\n1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        # Parser powinien zgłosić błąd lub poprawnie sparsować, jeśli obsługuje takie przypadki.
-        with pytest.raises(CSVParsingError, match="header"):
-            parse_csv(file_obj, required_fields=["id", "first name", "age"])
+    def test_no_header_raises(self) -> None:
+        csv_ = "1,Alice,30\n2,Bob,25"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Niewłaściwe nazwy kolumn",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+            )
 
-    def test_header_with_different_case_formats(self):
-        """Test nagłówków z różnymi formatami wielkości liter (np. 'First_Name' vs 'first_name')."""
-        csv_content = "ID,First_Name,Age\n1,Alice,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        # Jeśli parser jest case-sensitive, zgłosi błąd dla wymaganych pól w innym formacie.
-        with pytest.raises(CSVParsingError, match="Missing required fields"):
-            parse_csv(file_obj, required_fields=["id", "first_name", "age"])
+    def test_header_only_digits(self) -> None:
+        csv_ = "1,2,3\n1,Alice,30"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"tylko liczby",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["1", "2", "3"],
+            )
 
-#Nieprawidlowe dane
-class TestCSVParserInvalidData:
+    def test_header_starts_with_digit(self) -> None:
+        csv_ = "1col,name,age\n1,Alice,30"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Nazwy nie mogą zaczynać się od cyfry",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["1col", "name", "age"],
+            )
 
-    def test_required_field_empty_value(self):
-        """Test pustych wymaganych pól."""
-        csv_content = "id,name,age\n1,,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="Missing required values"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+    def test_header_contains_space(self) -> None:
+        csv_ = "id,first name,age\n1,Alice,30"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"zawierają spacje",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "first name", "age"],
+            )
 
-    def test_empty_lines_in_middle_of_file(self):
-        """Test pustych linii w środku pliku."""
-        csv_content = "id,name,age\n1,Alice,30\n\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+    def test_header_with_duplicates(self) -> None:
+        csv_ = "id,name,name\n1,Alice,30"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Powtórzone nazwy kolumn",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+            )
 
-    def test_incomplete_columns_in_row(self):
-        """Test niepełnej liczby kolumn w jednym z wierszy."""
-        csv_content = "id,name,age\n1,Alice,30\n2,Bob"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+    def test_missing_required_field(self) -> None:
+        csv_ = "id,name\n1,Alice"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Brakujące pola",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+            )
 
-    def test_empty_file(self):
-        """Test pustego pliku."""
-        csv_content = ""
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="header"):
-            parse_csv(file_obj)
+    def test_header_with_special_chars(self) -> None:
+        csv_ = "id,na$me,age\n1,Alice,30"
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "na$me", "age"],
+        )
+        assert result[0]["na$me"] == "Alice"
 
-    def test_invalid_numeric_value(self):
-        """Test nieprawidłowego formatu wartości (wiek jako tekst)."""
-        csv_content = "id,name,age\n1,Alice,trzydzieści"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-        assert result[0]["age"] == "trzydzieści"
+    def test_case_sensitive_header(self) -> None:
+        csv_ = "ID,Name,Age\n1,Alice,30"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Brakujące pola",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "Name", "Age"],
+            )
 
-    def test_boolean_value_format(self):
-        """Test poprawności formatu wartości bool (True/False vs 1/0)."""
-        csv_content = "id,name,is_active\n1,Alice,1\n2,Bob,0"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "is_active"])
+
+
+# Walidacja pojedynczych wierszy
+
+
+
+class TestCSVParserRowValidation:
+    """Błędy dotyczące wierszy danych."""
+
+    def test_empty_line_in_middle(self) -> None:
+        csv_ = "id,name,age\n1,Alice,30\n\n2,Bob,25"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"wierszu 3",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+            )
+
+    def test_row_with_too_few_columns(self) -> None:
+        csv_ = "id,name,age\n1,Alice"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Brak wartości w polach: age w wierszu 2",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+            )
+
+    def test_row_with_extra_columns(self) -> None:
+        csv_ = "id,name,age\n1,Alice,30,extra"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Dodatkowe kolumny w wierszu 2",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+            )
+
+    def test_required_field_blank_or_spaces(self) -> None:
+        csv_ = "id,name,age\n1,   ,30"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Brak wartości w polach: name w wierszu 2",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+            )
+
+    def test_separator_mismatch(self) -> None:
+        csv_ = "id,name,age\n1,Alice,30"
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Brakujące pola",
+        ):
+            parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name", "age"],
+                separator=";",
+            )
+
+    def test_numeric_string_not_converted(self) -> None:
+        csv_ = "id,age\n1,not_a_number"
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "age"],
+        )
+        assert result[0]["age"] == "not_a_number"
+
+    def test_boolean_1_0_as_string(self) -> None:
+        csv_ = "id,is_active\n1,1\n2,0"
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "is_active"],
+        )
         assert result[0]["is_active"] == "1"
         assert result[1]["is_active"] == "0"
 
-    def test_additional_columns_in_data_row(self):
-        """Test nadmiarowych kolumn w wierszu danych."""
-        csv_content = "id,name,age\n1,Alice,30,extra\n2,Bob,25,extra"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
-
-    def test_invalid_date_format(self):
-        """Test niepoprawnego formatu daty (jeśli parser miałby to sprawdzać)."""
-        csv_content = "id,name,join_date\n1,Alice,15-01-2021"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "join_date"])
+    def test_date_ddmmyyyy_kept(self) -> None:
+        csv_ = "id,join_date\n1,15-01-2021"
+        result = parse_csv(
+            io.StringIO(csv_),
+            wymagane_pola=["id", "join_date"],
+        )
         assert result[0]["join_date"] == "15-01-2021"
 
-    def test_spaces_instead_of_empty_values(self):
-        """Test wartości zawierających tylko spacje zamiast pustych wartości."""
-        csv_content = "id,name,age\n1,   ,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
 
-    def test_very_large_numeric_values(self):
-        """Test bardzo dużych wartości liczbowych."""
-        csv_content = f"id,name,age\n{2**31},Alice,30"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-        assert result[0]["id"] == str(2**31)
 
-    def test_newline_character_in_field(self):
-        """Test znaku nowej linii w polu (np. w komentarzu)."""
-        csv_content = 'id,name,comment\n1,Alice,"Line1\\nLine2"'
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "comment"])
-        assert "\\n" in result[0]["comment"]
+# I/O i inne przypadki brzegowe
 
-    def test_very_long_field_value(self):
-        """Test bardzo długiego ciągu znaków w polu (1000+ znaków)."""
-        long_comment = "a" * 1000
-        csv_content = f"id,name,comment\n1,Alice,{long_comment}"
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "comment"])
-        assert len(result[0]["comment"]) == 1000
 
-    def test_invalid_encoding_simulation(self):
-        """Symulacja błędu kodowania (UnicodeDecodeError)."""
 
-        class FakeFile:
-            def __iter__(self):
-                raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid start byte")
+class TestCSVParserIOAndEdge:
+    """Obsługa wyjątków związanych z plikami i wydajnością."""
 
-        with pytest.raises(CSVParsingError, match="Unable to decode"):
-            parse_csv(FakeFile())
-
-    def test_invalid_separator_in_data(self):
-        """Test błędnego separatora w danych (np. ';' zamiast ',')."""
-        csv_content = "id;name;age\n1;Alice;30"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError):
-            parse_csv(file_obj, required_fields=["id", "name", "age"], delimiter=",")
-
-    def test_large_file_with_one_bad_line(self):
-        """Test dużego pliku z błędem w jednej linii (np. brak kolumn w linii 999)."""
-        rows = [f"{i},User{i},{20+i}" for i in range(2, 999)] + ["999,BadLine"] + ["1000,User1000,30"]
-        csv_content = "\n".join(["id,name,age"] + rows)
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="line 999"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
-
-class TestCSVParserPerformance:
-
-    def test_parse_very_large_file(self):
-        """Test parsowania bardzo dużego pliku (100k rekordów)."""
-        num_records = 100_000
-        header = "id,name,age"
-        rows = [f"{i},User{i},{20+i%50}" for i in range(1, num_records + 1)]
-        csv_content = "\n".join([header] + rows)
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-        assert len(result) == num_records
-        assert result[0]["name"] == "User1"
-        assert result[-1]["age"] == str(20 + (num_records % 50))
-
-    def test_parse_large_file_time(self):
-        """Pomiar czasu wykonania dla dużego pliku - powinno być poniżej 1 sekundy."""
-        num_records = 100_000
-        header = "id,name,age"
-        rows = [f"{i},User{i},{20+i%50}" for i in range(1, num_records + 1)]
-        csv_content = "\n".join([header] + rows)
-        file_obj = io.StringIO(csv_content)
-
-        start_time = time.time()
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-        end_time = time.time()
-        elapsed = end_time - start_time
-
-        assert elapsed < 1, f"Parsing took too long: {elapsed:.2f} seconds"
-        assert len(result) == num_records
-
-    def test_parser_memory_simple_check(self):
-        """Prosty test, czy parser nie zwraca pustych wyników dla dużych danych (proxy test na pamięć)."""
-        num_records = 50_000
-        header = "id,name,age"
-        rows = [f"{i},User{i},{20+i%50}" for i in range(1, num_records + 1)]
-        csv_content = "\n".join([header] + rows)
-        file_obj = io.StringIO(csv_content)
-        result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-        assert len(result) == num_records
-
-    def test_multiple_calls_parser(self):
-        """Test wielokrotnego wywołania parsera w pętli (100 razy)."""
-        num_records = 1000
-        header = "id,name,age"
-        rows = [f"{i},User{i},{20+i%50}" for i in range(1, num_records + 1)]
-        csv_content = "\n".join([header] + rows)
-
-        for _ in range(100):
-            file_obj = io.StringIO(csv_content)
-            result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-            assert len(result) == num_records
-
-    def test_stability_under_repeated_parse(self):
-        """Test stabilności działania parsera przy powtarzanym parsowaniu tego samego pliku."""
-        csv_content = "id,name,age\n1,Alice,30\n2,Bob,25"
-        for _ in range(1000):
-            file_obj = io.StringIO(csv_content)
-            result = parse_csv(file_obj, required_fields=["id", "name", "age"])
-            assert result[0]["name"] == "Alice"
-            assert result[1]["age"] == "25"
-
-class TestCSVParserExceptions:
-
-    def test_exception_type_and_message_contains_line_number(self):
-        """Test, czy wyjątek zawiera numer linii w komunikacie."""
-        csv_content = "id,name,age\n1,Alice,30\n2,Bob"  # brak wartości w 3. kolumnie w 3. linii
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError) as excinfo:
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
-        assert "line 3" in str(excinfo.value)
-
-    def test_unicode_decode_error_handling(self):
-        """Test obsługi błędu kodowania UnicodeDecodeError."""
-        class FakeFile:
-            def __iter__(self):
-                raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid start byte")
-
-        with pytest.raises(CSVParsingError, match="Unable to decode"):
-            parse_csv(FakeFile())
-
-    def test_file_not_found_error_handling(self):
-        """Test obsługi błędu przy próbie otwarcia nieistniejącego pliku (jeśli dotyczy)."""
-        import os
-        from src.ParserCSV import parse_csv_file  # jeśli masz funkcję czytającą z pliku
-
+    def test_parse_csv_file_not_found(self) -> None:
         with pytest.raises(FileNotFoundError):
-            parse_csv_file("nieistniejacy_plik.csv")
+            parse_csv_file("does_not_exist.csv", wymagane_pola=["id"])
 
-    def test_binary_file_as_csv(self):
-        """Test próby wczytania pliku binarnego jako CSV (powinien rzucić błąd)."""
-        binary_data = b"\x00\x01\x02\x03\x04"
-        fake_file = io.BytesIO(binary_data)
-        with pytest.raises(CSVParsingError):
-            # Trzeba przekonwertować na TextIO lub wywołać parser bezpośrednio na tym obiekcie
-            parse_csv(fake_file)
+    def test_bytesio_raises_parsing_error(self) -> None:
+        fake = io.BytesIO(b"id,name\n1,Alice")
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Błąd parsowania CSV",
+        ):
+            parse_csv(fake, wymagane_pola=["id", "name"])
 
-    def test_required_fields_empty_or_none(self):
-        """Test obsługi sytuacji gdy wymagane pola są puste lub None."""
-        csv_content = "id,name,age\n1,,30\n2,Bob,25"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="Missing required values"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+    def test_file_like_without_readlines_seek(self) -> None:
+        class LineIter:  # noqa: D401
+            def __init__(self, text: str) -> None:
+                self.lines = text.splitlines(True)
 
-    def test_invalid_delimiter(self):
-        """Test rzucenia błędu dla złego delimiter'a."""
-        csv_content = "id;name;age\n1;Alice;30"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError):
-            parse_csv(file_obj, required_fields=["id", "name", "age"], delimiter=",")
+            def __iter__(self):
+                return iter(self.lines)
 
-    def test_duplicate_headers_error(self):
-        """Test błędu przy nagłówkach z duplikatami."""
-        csv_content = "id,name,name\n1,Alice,30"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="duplicate"):
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
+        data = "id,name\n1,Alice"
+        result = parse_csv(
+            LineIter(data),
+            wymagane_pola=["id", "name"],
+        )
+        assert result[0]["name"] == "Alice"
 
-    def test_parsing_empty_file(self):
-        """Test próby parsowania pustego pliku."""
-        csv_content = ""
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError, match="no header"):
-            parse_csv(file_obj)
+    def test_unicode_decode_error(self) -> None:
+        class Fake:  # noqa: D401
+            def readlines(self):  # noqa: D401
+                raise UnicodeDecodeError("utf-8", b"", 0, 1, "err")
 
-    def test_parser_with_wrong_type_input(self):
-        """Test podania niepoprawnego typu (np. int zamiast TextIO)."""
-        with pytest.raises(CSVParsingError):
-            parse_csv(12345)
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Nie można odczytać pliku CSV",
+        ):
+            parse_csv(Fake(), wymagane_pola=["id"])
 
-    def test_exception_message_readability(self):
-        """Test czy komunikaty błędów są czytelne."""
-        csv_content = "id,name,age\n1,Alice,30\n2,Bob"
-        file_obj = io.StringIO(csv_content)
-        with pytest.raises(CSVParsingError) as excinfo:
-            parse_csv(file_obj, required_fields=["id", "name", "age"])
-        msg = str(excinfo.value)
-        assert "Missing required values" in msg and "line 3" in msg
+    def test_invalid_type_argument(self) -> None:
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Nieprawidłowy obiekt pliku CSV",
+        ):
+            parse_csv(12345, wymagane_pola=["id"])
+
+    def test_empty_file(self) -> None:
+        with pytest.raises(
+            CSVParsingError,
+            match=r"Brak wiersza nagłówka",
+        ):
+            parse_csv(io.StringIO(""), wymagane_pola=["id"])
+
+    def test_repeated_calls_stability(self) -> None:
+        csv_ = "id,name\n1,Alice\n2,Bob"
+        for _ in range(50):
+            result = parse_csv(
+                io.StringIO(csv_),
+                wymagane_pola=["id", "name"],
+            )
+            assert result[1]["name"] == "Bob"
+
+    def test_performance_proxy(self) -> None:
+        num = 100_000
+        header = "id,name"
+        rows = [f"{i},User{i}" for i in range(1, num + 1)]
+        content = "\n".join([header] + rows)
+
+        start = time.time()
+        result = parse_csv(
+            io.StringIO(content),
+            wymagane_pola=["id", "name"],
+        )
+        elapsed = time.time() - start
+
+        assert elapsed < 1.0, f"Za wolno: {elapsed:.2f}s"
+        assert len(result) == num
