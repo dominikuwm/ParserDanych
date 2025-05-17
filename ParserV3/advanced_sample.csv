@@ -1,0 +1,6 @@
+id,name,age,email,is_active,join_date
+1,Alice,30,alice@example.com,True,2021-01-15
+2,Bob,25,bob@example.com,False,2022-06-30
+3,Charlie,40,charlie@example.com,True,2019-11-20
+4,David,28,,True,2023-03-10
+5,Eve,35,eve@example.com,False,2020-08-05
